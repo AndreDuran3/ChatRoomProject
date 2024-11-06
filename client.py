@@ -268,5 +268,3 @@ receive_thread.start()
 
 send_thread = threading.Thread(target=send_message)
 send_thread.start()
-client.py
-6 KB
