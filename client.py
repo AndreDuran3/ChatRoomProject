@@ -1,6 +1,7 @@
 import socket
 import threading
 import json
+import time
 
 # Define message structure class
 class ChatMessage:
@@ -41,66 +42,71 @@ def decode_message(message_bytes):
     return message
 
 # Define client connection
-client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client.connect(('127.0.0.1', 18000))
+def create_connection():
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client.connect(('127.0.0.1', 18000))
+    return client
 
+client = create_connection()
 in_chatroom = False  # State variable to track if the client is in the chatroom
 client_connected = True  # Track if the client is connected to the server
 nickname = ""  # Initialize nickname as an empty string
 
 # Function to handle receiving messages from the server
 def receive():
-    global in_chatroom, client_connected
+    global in_chatroom, client_connected, client
     while client_connected:
         try:
             message_bytes = client.recv(1024)
             message = decode_message(message_bytes)
 
-            # If message is None, the connection may have closed or sent empty data
-            if message is None:
-                print("\nDisconnected from the server.")
-                client_connected = False
-                client.close()
-                break
-
             # Process messages based on flags
-            if message.REPORT_RESPONSE_FLAG == 1:
-                print(f"\nThere are {message.NUMBER} active users:")
-                print(message.PAYLOAD)
+            if message:
+                if message.REPORT_RESPONSE_FLAG == 1:
+                    print(f"\nThere are {message.NUMBER} active users:")
+                    print(message.PAYLOAD)
 
-            elif message.JOIN_ACCEPT_FLAG == 1:
-                print("\nSuccessfully joined the chatroom.")
-                print("Chat history:")
-                print(message.PAYLOAD)
-                in_chatroom = True  # Switch to chatroom mode
-                # Display one-time message upon entering chatroom
-                print("\nYou are now in a chatroom, enter 'q' to leave.")
+                elif message.JOIN_ACCEPT_FLAG == 1:
+                    print("\nSuccessfully joined the chatroom.")
+                    print("Chat history:")
+                    print(message.PAYLOAD)
+                    in_chatroom = True  # Switch to chatroom mode
+                    # Display one-time message upon entering chatroom
+                    print("\nYou are now in a chatroom, enter 'q' to leave.")
 
-            elif message.JOIN_REJECT_FLAG == 1:
-                print("\nJoin request rejected:", message.PAYLOAD)
+                elif message.JOIN_REJECT_FLAG == 1:
+                    print("\nJoin request rejected:", message.PAYLOAD)
+                    in_chatroom = False  # Return to main menu if join is rejected
 
-            elif message.NEW_USER_FLAG == 1:
-                print(f"\n{message.USERNAME} joined the chatroom.")
+                elif message.NEW_USER_FLAG == 1:
+                    print(f"\n{message.USERNAME} joined the chatroom.")
 
-            elif message.QUIT_ACCEPT_FLAG == 1:
-                print(f"\n{message.USERNAME} left the chatroom.")
+                elif message.QUIT_ACCEPT_FLAG == 1:
+                    print(f"\n{message.USERNAME} left the chatroom.")
+                    in_chatroom = False  # Set client out of chatroom mode
 
-            elif message.PAYLOAD:
-                print(f"\n{message.PAYLOAD}")
+                elif message.PAYLOAD:
+                    print(f"\n{message.PAYLOAD}")
 
-        except Exception as e:
-            print("An error occurred while receiving:", e)
-            client_connected = False
-            client.close()
-            break
+        except (ConnectionResetError, ConnectionAbortedError):
+            # Attempt to reconnect if the connection was lost unintentionally
+            print("Connection lost. Attempting to reconnect...")
+            client = create_connection()
+            if in_chatroom:
+                # Rejoin the chatroom if disconnected unintentionally
+                join_message = ChatMessage()
+                join_message.JOIN_REQUEST_FLAG = 1
+                join_message.USERNAME = nickname
+                client.send(encode_message(join_message))
+            time.sleep(2)
 
 # Function to handle sending messages to the server
 def send_message():
-    global in_chatroom, client_connected, nickname
+    global in_chatroom, client_connected, nickname, client
     while client_connected:
         if not in_chatroom:
             # Show menu only if not in the chatroom
-            print("\nMenu:\n1. Get chatroom report\n2. Join chatroom\n3. Quit")
+            print("\nMenu:\n1. Get chatroom report\n2. Join chatroom\n3. Disconnect from server")
             choice = input("Your choice: ")
 
             if choice == '1':
@@ -117,7 +123,7 @@ def send_message():
                     join_message.JOIN_REQUEST_FLAG = 1
                     join_message.USERNAME = nickname
                     client.send(encode_message(join_message))
-                    in_chatroom = True  # Prevents menu re-prompting
+                    in_chatroom = True  # Prevents menu re-prompting until response
 
             elif choice == '3':
                 if client_connected:
@@ -125,10 +131,9 @@ def send_message():
                     quit_message.QUIT_REQUEST_FLAG = 1
                     quit_message.USERNAME = nickname
                     client.send(encode_message(quit_message))
-                    client.close()
                     client_connected = False
-                break
-
+                    client.close()
+                    print("Disconnected from the server.")
             else:
                 print("Invalid choice. Please try again.")
         
@@ -141,6 +146,7 @@ def send_message():
                 quit_message.QUIT_REQUEST_FLAG = 1
                 quit_message.USERNAME = nickname
                 client.send(encode_message(quit_message))
+                print("Exiting chatroom. Returning to main menu.")
                 in_chatroom = False  # Return to menu mode
             elif client_connected:
                 # Send chat message
